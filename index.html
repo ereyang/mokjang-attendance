@@ -34,6 +34,8 @@
   header h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.02em; }
   #sync { color: var(--muted); font-size: 0.85rem; min-height: 1.3em; margin-top: 2px; }
   #sync.err { color: var(--c-out); }
+  #who { color: var(--muted); font-size: 0.9rem; }
+  #who button { border: 0; background: none; color: var(--accent); text-decoration: underline; padding: 0 0 0 6px; font-size: inherit; }
 
   /* 탭 */
   .tabs { display: flex; gap: 6px; justify-content: center; margin: 10px 0 14px; }
@@ -118,6 +120,10 @@
   .panel textarea { min-height: 260px; line-height: 1.6; }
   .hint { color: var(--muted); font-size: 0.85rem; margin: 6px 0 14px; }
   .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
+  .codes { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .codes div { display: flex; justify-content: space-between; padding: 5px 2px; border-bottom: 1px dashed var(--line); }
+  .codes div:last-child { border-bottom: 0; }
+  .codes code { font-size: 1rem; letter-spacing: 0.08em; }
 
   /* 로그인 */
   #login { max-width: 340px; margin: 60px auto; text-align: center; }
@@ -130,12 +136,13 @@
 <body>
 <header>
   <h1 id="title">목원 출석부</h1>
+  <div id="who" class="hidden"><span id="whoName"></span><button id="logout">나가기</button></div>
   <div id="sync"></div>
 </header>
 
 <div class="wrap">
   <div id="login" class="hidden">
-    <p>목장 암호를 입력해 주세요.</p>
+    <p>개인 코드를 입력해 주세요.<br><small style="color:var(--muted)">관리자는 관리자 암호를 넣어요.</small></p>
     <input id="pw" type="password" autocomplete="current-password">
     <button class="btn main" id="loginBtn">들어가기</button>
     <div id="loginMsg"></div>
@@ -175,6 +182,11 @@
         <textarea id="membersIn" placeholder="한 줄에 한 명씩 적어 주세요"></textarea>
         <p class="hint">한 줄에 한 명씩 적어요. 순서대로 출석부에 나와요.<br>이름을 지워도 지난 출석 기록은 시트에 남아 있어요.</p>
         <div class="row-btns" style="margin-top:0"><button class="btn main" id="saveMembers">저장</button></div>
+        <div class="codes">
+          <label>개인 코드</label>
+          <p class="hint" style="margin-top:0">목원마다 본인 코드만 알려 주세요. 코드로 들어오면 본인 기록만 보고 고칠 수 있어요.<br>새 목원의 코드는 저장하면 만들어져요. 코드를 바꾸려면 시트의 ‘목원’ 탭 B열을 고치세요.</p>
+          <div id="codes"></div>
+        </div>
       </div>
     </section>
   </div>
@@ -195,8 +207,10 @@
   const DOW = ["일", "월", "화", "수", "목", "금", "토"];
   const $ = id => document.getElementById(id);
 
-  // data = { title, members: [이름], rec: { "2026-10-18": { 이름: { s: "2부", r: "사유" } } } }
-  let data = { title: "", members: [], rec: {} };
+  // data = { title, members: [이름], codes: { 이름: 코드 }, rec: { "2026-10-18": { 이름: { s: "2부", r: "사유" } } } }
+  let data = { title: "", members: [], codes: {}, rec: {} };
+  // 관리자("admin")는 전체, 목원("member")은 서버가 본인(me) 기록만 보내줌
+  let role = "admin", me = "";
   let pw = "";
   try { pw = localStorage.getItem(PW_KEY) || ""; } catch {}
 
@@ -243,18 +257,21 @@
   let queue = Promise.resolve();
   let pending = 0;
   function send(body) {
-    if (!SHEET_URL) { saveLocal(); setSync("이 기기에 저장됨 (연습용)"); return; }
+    if (!SHEET_URL) { saveLocal(); setSync("이 기기에 저장됨 (연습용)"); return Promise.resolve(null); }
     pending++;
     setSync("저장 중…");
-    queue = queue.then(async () => {
+    return queue = queue.then(async () => {
       try {
         const d = await call(body);
         if (!d.ok) throw new Error(d.error);
         pending--;
         if (!pending) setSync("저장됨 ✓");
+        return d;
       } catch (e) {
         pending--;
-        setSync("저장 실패 — 인터넷 연결을 확인하고 다시 눌러 주세요", true);
+        setSync(e.message === "forbidden" ? "저장 실패 — 권한이 없어요"
+          : "저장 실패 — 인터넷 연결을 확인하고 다시 눌러 주세요", true);
+        return null;
       }
     });
   }
@@ -275,7 +292,9 @@
     try {
       const d = await call({ action: "load" });
       if (!d.ok) { setSync(""); return d.error === "pw" ? "pw" : false; }
-      data = { title: d.title || "", members: d.members || [], rec: {} };
+      role = d.role || "admin";
+      me = d.me || "";
+      data = { title: d.title || "", members: d.members || [], codes: d.codes || {}, rec: {} };
       (d.records || []).forEach(([date, name, s, r]) => {
         (data.rec[date] = data.rec[date] || {})[name] = { s, r: r || "" };
       });
@@ -293,7 +312,12 @@
     $("title").textContent = t;
     document.title = t;
     $("monthLabel").textContent = viewY + "년 " + (viewM + 1) + "월";
-    document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+    $("who").classList.toggle("hidden", !SHEET_URL);
+    $("whoName").textContent = role === "member" ? me + " 님" : "관리자";
+    document.querySelectorAll(".tabs button").forEach(b => {
+      b.classList.toggle("on", b.dataset.tab === tab);
+      b.classList.toggle("hidden", b.dataset.tab === "members" && role !== "admin");
+    });
     ["check", "month", "members"].forEach(k => $("tab-" + k).classList.toggle("hidden", k !== tab));
     $("monthNav").classList.toggle("hidden", tab === "members");
     if (tab === "check") renderCheck();
@@ -310,12 +334,13 @@
     if (!suns.includes(selDate)) selDate = suns.includes(ymd(lastSun)) ? ymd(lastSun) : suns[0];
     $("sundays").innerHTML = suns.map(s => {
       const day = data.rec[s] || {};
-      return `<button data-date="${s}" class="${s === selDate ? "on" : ""}">${md(s)} (일)<small>${attended(day)}/${data.members.length}명</small></button>`;
+      const sub = role === "member" ? (day[me] ? day[me].s : "—") : `${attended(day)}/${data.members.length}명`;
+      return `<button data-date="${s}" class="${s === selDate ? "on" : ""}">${md(s)} (일)<small>${esc(sub)}</small></button>`;
     }).join("");
 
     const day = data.rec[selDate] || {};
     const marked = data.members.filter(n => day[n]).length;
-    $("count").innerHTML = data.members.length
+    $("count").innerHTML = data.members.length && role === "admin"
       ? `출석 <b>${attended(day)}</b>명 · 체크 안 함 <b>${data.members.length - marked}</b>명`
       : "";
 
@@ -361,7 +386,8 @@
       }).join("");
       html += `<tr><td>${esc(n)}</td>${cells}<td><b>${cnt}</b>/${suns.length}</td></tr>`;
     });
-    html += `<tr><td><b>합계</b></td>${suns.map(s => `<td><b>${attended(data.rec[s] || {})}</b></td>`).join("")}<td></td></tr></tbody>`;
+    if (role === "admin") html += `<tr><td><b>합계</b></td>${suns.map(s => `<td><b>${attended(data.rec[s] || {})}</b></td>`).join("")}<td></td></tr>`;
+    html += `</tbody>`;
     $("table").innerHTML = html;
 
     const rs = [];
@@ -375,6 +401,12 @@
   function renderMembers() {
     $("titleIn").value = data.title;
     $("membersIn").value = data.members.join("\n");
+    renderCodes();
+  }
+
+  function renderCodes() {
+    $("codes").innerHTML = !SHEET_URL ? `<p class="hint">시트를 연결하면 만들어져요.</p>`
+      : data.members.map(n => `<div><span>${esc(n)}</span><code>${data.codes[n] ? esc(data.codes[n]) : "저장하면 생겨요"}</code></div>`).join("");
   }
 
   function esc(s) {
@@ -435,8 +467,13 @@
       .forEach(n => { if (!list.includes(n)) list.push(n); });
     data.members = list;
     data.title = $("titleIn").value.trim();
-    send({ action: "members", members: list, title: data.title });
-    tab = "check";
+    send({ action: "members", members: list, title: data.title }).then(d => {
+      if (!d || !d.codes) return;
+      data.codes = d.codes;
+      if (tab === "members") renderCodes();
+    });
+    // 새 목원이 있으면 코드를 확인할 수 있게 목원 관리에 머무름
+    if (!SHEET_URL || list.every(n => data.codes[n])) tab = "check";
     render();
   };
 
@@ -468,14 +505,15 @@
     if (r === true) {
       $("login").classList.add("hidden");
       $("app").classList.remove("hidden");
-      if (!data.members.length) tab = "members";
+      if (role !== "admin" && tab === "members") tab = "check";
+      if (!data.members.length && role === "admin") tab = "members";
       render();
       return;
     }
     $("login").classList.remove("hidden");
     $("app").classList.add("hidden");
     if (r === "pw") {
-      $("loginMsg").textContent = pw ? "암호가 맞지 않아요." : "";
+      $("loginMsg").textContent = pw ? "코드가 맞지 않아요." : "";
       try { localStorage.removeItem(PW_KEY); } catch {}
     } else {
       $("loginMsg").textContent = "연결이 안 돼요. 잠시 후 다시 눌러 주세요.";
@@ -485,6 +523,16 @@
     pw = $("pw").value.trim();
     try { localStorage.setItem(PW_KEY, pw); } catch {}
     enter();
+  };
+  $("logout").onclick = () => {
+    pw = "";
+    try { localStorage.removeItem(PW_KEY); } catch {}
+    data = { title: "", members: [], codes: {}, rec: {} };
+    role = "admin"; me = "";
+    $("pw").value = ""; $("loginMsg").textContent = "";
+    $("app").classList.add("hidden");
+    $("who").classList.add("hidden");
+    $("login").classList.remove("hidden");
   };
   $("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
 
