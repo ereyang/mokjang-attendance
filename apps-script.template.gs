@@ -19,7 +19,10 @@ function doPost(e) {
   try { body = JSON.parse(e.postData.contents); } catch (err) { return out({ ok: false, error: "bad" }); }
 
   const who = auth(body.pw);
-  if (!who) return out({ ok: false, error: "pw" });
+  if (!who) {
+    Utilities.sleep(1500);   // 코드 무작위 대입을 느리게
+    return out({ ok: false, error: "pw" });
+  }
 
   if (body.action === "load") return out(load(who));
 
@@ -68,16 +71,18 @@ function load(who) {
 }
 
 function mark(date, name, service, reason) {
-  const sh = sheet(RECORD_SHEET, ["날짜", "이름", "예배", "사유"]);
+  const sh = sheet(RECORD_SHEET, ["날짜", "이름", "예배", "사유", "수정 시각"]);
   const rows = recordRows();
   const i = rows.findIndex(r => r[0] === date && r[1] === name);
   if (!service) {
     if (i >= 0) sh.deleteRow(i + 2);
     return;
   }
-  const row = [[date, name, service, reason || ""]];
-  if (i >= 0) sh.getRange(i + 2, 1, 1, 4).setValues(row);
-  else sh.getRange(sh.getLastRow() + 1, 1, 1, 4).setNumberFormat("@").setValues(row);
+  const row = [[date, name, service, reason || "", new Date()]];
+  const r = i >= 0 ? i + 2 : sh.getLastRow() + 1;
+  if (i < 0) sh.getRange(r, 1, 1, 4).setNumberFormat("@");
+  sh.getRange(r, 1, 1, 5).setValues(row);
+  sh.getRange(r, 5).setNumberFormat("yyyy-mm-dd hh:mm");
 }
 
 // 명단을 다시 쓰면서 기존 코드는 유지하고, 새 목원에게 코드를 만들어 줌
@@ -113,7 +118,7 @@ function memberRows() {
 
 // [[날짜, 이름, 예배, 사유]]
 function recordRows() {
-  const sh = sheet(RECORD_SHEET, ["날짜", "이름", "예배", "사유"]);
+  const sh = sheet(RECORD_SHEET, ["날짜", "이름", "예배", "사유", "수정 시각"]);
   if (sh.getLastRow() < 2) return [];
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   return sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues().map(r => [
