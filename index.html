@@ -217,6 +217,7 @@
     while (d.getMonth() === m) { out.push(ymd(d)); d.setDate(d.getDate() + 7); }
     return out;
   }
+  const parts = s => s ? s.split(", ") : [];   // "1부, 2부" → ["1부", "2부"]
   const md = s => { const [, m, d] = s.split("-"); return (+m) + "/" + (+d); };
 
   // ---------- 저장소 ----------
@@ -327,7 +328,7 @@
       return `<div class="member" data-i="${i}">
         <div class="name">${esc(n)}<small>${cur.s ? "" : "체크 안 함"}</small></div>
         <div class="opts">${OPTIONS.map(o =>
-          `<button class="${o.cls}${cur.s === o.v ? " on" : ""}" data-v="${o.v}">${o.v}</button>`).join("")}</div>
+          `<button class="${o.cls}${parts(cur.s).includes(o.v) ? " on" : ""}" data-v="${o.v}">${o.v}</button>`).join("")}</div>
         ${cur.s === "못드림" ? `<input class="reason" placeholder="못 드린 사유 (예: 출장, 아파서)" value="${esc(cur.r || "")}">` : ""}
       </div>`;
     }).join("");
@@ -355,8 +356,8 @@
         const c = (data.rec[s] || {})[n];
         if (!c) return `<td class="blank">·</td>`;
         if (c.s !== "못드림") cnt++;
-        const label = c.s === "못드림" ? "✕" : c.s;
-        return `<td><span class="tag ${CLS[c.s]}" title="${esc(c.r || "")}">${label}</span></td>`;
+        return `<td>${parts(c.s).map(v =>
+          `<span class="tag ${CLS[v] || "in"}" title="${esc(c.r || "")}">${v === "못드림" ? "✕" : v}</span>`).join(" ")}</td>`;
       }).join("");
       html += `<tr><td>${esc(n)}</td>${cells}<td><b>${cnt}</b>/${suns.length}</td></tr>`;
     });
@@ -397,7 +398,12 @@
     const name = data.members[b.closest(".member").dataset.i];
     const cur = (data.rec[selDate] || {})[name] || {};
     const v = b.dataset.v;
-    mark(selDate, name, cur.s === v ? "" : v, cur.r);   // 같은 걸 다시 누르면 체크 해제
+    // 예배는 여러 개 고를 수 있고, 같은 걸 다시 누르면 해제. 못드림은 다른 것과 함께 못 고름
+    let sel = parts(cur.s).filter(x => x !== "못드림");
+    if (v === "못드림") sel = cur.s === "못드림" ? [] : ["못드림"];
+    else if (sel.includes(v)) sel = sel.filter(x => x !== v);
+    else sel = OPTIONS.map(o => o.v).filter(x => x === v || sel.includes(x));   // 1부, 2부 … 순서 유지
+    mark(selDate, name, sel.join(", "), cur.r);
     renderCheck();
     if (v === "못드림" && cur.s !== v) {
       const inp = document.querySelector(`.member[data-i="${b.closest(".member").dataset.i}"] .reason`);
