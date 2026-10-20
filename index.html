@@ -179,12 +179,12 @@
         <label for="titleIn">목장 이름</label>
         <input id="titleIn" placeholder="예: 09목장">
         <label for="membersIn" style="margin-top:16px">목원 명단</label>
-        <textarea id="membersIn" placeholder="한 줄에 한 명씩 적어 주세요"></textarea>
-        <p class="hint">한 줄에 한 명씩 적어요. 순서대로 출석부에 나와요.<br>이름을 지워도 지난 출석 기록은 시트에 남아 있어요.</p>
+        <textarea id="membersIn" placeholder="한 줄에 한 가정씩 적어 주세요&#10;예) 홍길동, 김영희&#10;    김철수"></textarea>
+        <p class="hint">한 줄에 한 가정씩 적어요. 부부는 <b>쉼표(,)</b>로 이어 적으면 코드 하나로 같이 들어와서 각자 따로 체크해요.<br>순서대로 출석부에 나와요. 이름을 지워도 지난 출석 기록은 시트에 남아 있어요.</p>
         <div class="row-btns" style="margin-top:0"><button class="btn main" id="saveMembers">저장</button></div>
         <div class="codes">
           <label>개인 코드</label>
-          <p class="hint" style="margin-top:0">목원마다 본인 코드만 알려 주세요. 코드로 들어오면 본인 기록만 보고 고칠 수 있어요.<br>새 목원의 코드는 저장하면 만들어져요. 코드를 바꾸려면 시트의 ‘목원’ 탭 B열을 고치세요.</p>
+          <p class="hint" style="margin-top:0">가정마다 그 가정 코드만 알려 주세요. 코드로 들어오면 본인(부부) 기록만 보고 고칠 수 있어요.<br>새 목원의 코드는 저장하면 만들어져요. 코드를 바꾸려면 시트의 ‘목원’ 탭 B열을 고치세요.</p>
           <div id="codes"></div>
         </div>
       </div>
@@ -334,7 +334,9 @@
     if (!suns.includes(selDate)) selDate = suns.includes(ymd(lastSun)) ? ymd(lastSun) : suns[0];
     $("sundays").innerHTML = suns.map(s => {
       const day = data.rec[s] || {};
-      const sub = role === "member" ? (day[me] ? day[me].s : "—") : `${attended(day)}/${data.members.length}명`;
+      const sub = role === "member" && data.members.length === 1
+        ? (day[data.members[0]] ? day[data.members[0]].s : "—")
+        : `${attended(day)}/${data.members.length}명`;
       return `<button data-date="${s}" class="${s === selDate ? "on" : ""}">${md(s)} (일)<small>${esc(sub)}</small></button>`;
     }).join("");
 
@@ -398,15 +400,26 @@
     $("reasons").innerHTML = rs.join("") || `<div class="empty">이번 달은 없어요 🙌</div>`;
   }
 
+  // 같은 코드를 가진 사람끼리 한 가정으로 묶음 (코드 없는 사람은 혼자)
+  function groupsOf() {
+    const out = [], byCode = {};
+    data.members.forEach(n => {
+      const c = data.codes[n];
+      if (c && byCode[c]) byCode[c].push(n);
+      else { const g = [n]; out.push(g); if (c) byCode[c] = g; }
+    });
+    return out;
+  }
+
   function renderMembers() {
     $("titleIn").value = data.title;
-    $("membersIn").value = data.members.join("\n");
+    $("membersIn").value = groupsOf().map(g => g.join(", ")).join("\n");
     renderCodes();
   }
 
   function renderCodes() {
     $("codes").innerHTML = !SHEET_URL ? `<p class="hint">시트를 연결하면 만들어져요.</p>`
-      : data.members.map(n => `<div><span>${esc(n)}</span><code>${data.codes[n] ? esc(data.codes[n]) : "저장하면 생겨요"}</code></div>`).join("");
+      : groupsOf().map(g => `<div><span>${esc(g.join(" · "))}</span><code>${data.codes[g[0]] ? esc(data.codes[g[0]]) : "저장하면 생겨요"}</code></div>`).join("");
   }
 
   function esc(s) {
@@ -462,18 +475,23 @@
   });
 
   $("saveMembers").onclick = () => {
-    const list = [];
-    $("membersIn").value.split("\n").map(s => s.trim()).filter(Boolean)
-      .forEach(n => { if (!list.includes(n)) list.push(n); });
+    // 한 줄 = 한 가정, 쉼표로 부부 구분
+    const list = [], groups = [];
+    $("membersIn").value.split("\n").forEach(line => {
+      const g = line.split(/[,，、·]/).map(s => s.trim()).filter(n => n && !list.includes(n));
+      if (!g.length) return;
+      list.push(...g);
+      groups.push(g);
+    });
     data.members = list;
     data.title = $("titleIn").value.trim();
-    send({ action: "members", members: list, title: data.title }).then(d => {
+    send({ action: "members", members: list, groups, title: data.title }).then(d => {
       if (!d || !d.codes) return;
       data.codes = d.codes;
-      if (tab === "members") renderCodes();
+      if (tab === "members") renderMembers();
     });
-    // 새 목원이 있으면 코드를 확인할 수 있게 목원 관리에 머무름
-    if (!SHEET_URL || list.every(n => data.codes[n])) tab = "check";
+    // 시트에 연결돼 있으면 새 코드를 확인할 수 있게 목원 관리에 머무름
+    if (!SHEET_URL) tab = "check";
     render();
   };
 

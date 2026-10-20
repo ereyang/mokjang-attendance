@@ -8,6 +8,7 @@
 // - 관리자 암호로 들어오면 모든 기록을 보고 고칠 수 있고, 명단을 관리해요.
 // - 개인 코드로 들어오면 본인 기록만 받고, 본인 기록만 고칠 수 있어요.
 //   개인 코드는 명단을 저장할 때 새 목원에게 자동으로 만들어져요. ('목원' 시트 B열에서 직접 바꿔도 돼요)
+// - 부부처럼 명단 한 줄에 같이 적은 사람들은 같은 코드로 들어와서 각자 기록을 따로 체크해요.
 
 const ADMIN_PW = "여기에 관리자 암호";
 
@@ -30,14 +31,15 @@ function doPost(e) {
   lock.waitLock(20000);
   try {
     if (body.action === "mark") {
-      if (!who.admin && body.name !== who.name) return out({ ok: false, error: "forbidden" });
+      if (!who.admin && who.names.indexOf(body.name) < 0) return out({ ok: false, error: "forbidden" });
       mark(body.date, body.name, body.service, body.reason);
       return out({ ok: true });
     }
     if (body.action === "members") {
       if (!who.admin) return out({ ok: false, error: "forbidden" });
       PropertiesService.getScriptProperties().setProperty("title", body.title || "");
-      return out({ ok: true, codes: saveMembers(body.members || []) });
+      const groups = body.groups || (body.members || []).map(n => [n]);
+      return out({ ok: true, codes: saveMembers(groups) });
     }
   } finally {
     lock.releaseLock();
@@ -49,25 +51,25 @@ function out(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-// 관리자면 { admin: true }, 목원이면 { admin: false, name }, 아니면 null
+// 관리자면 { admin: true }, 목원이면 { admin: false, names: [같은 코드인 사람들] }, 아니면 null
 function auth(pw) {
   pw = String(pw || "").trim();
   if (!pw) return null;
   if (pw === ADMIN_PW) return { admin: true };
-  const row = memberRows().find(r => r[1] && r[1] === pw);
-  return row ? { admin: false, name: row[0] } : null;
+  const names = memberRows().filter(r => r[1] && r[1] === pw).map(r => r[0]);
+  return names.length ? { admin: false, names } : null;
 }
 
 function load(who) {
   const title = PropertiesService.getScriptProperties().getProperty("title") || "";
   const members = memberRows();
-  const records = recordRows().filter(r => who.admin || r[1] === who.name);
+  const records = recordRows().filter(r => who.admin || who.names.indexOf(r[1]) >= 0);
   if (who.admin) {
     const codes = {};
     members.forEach(r => codes[r[0]] = r[1]);
     return { ok: true, role: "admin", title, members: members.map(r => r[0]), codes, records };
   }
-  return { ok: true, role: "member", me: who.name, title, members: [who.name], records };
+  return { ok: true, role: "member", me: who.names.join(" · "), title, members: who.names, records };
 }
 
 function mark(date, name, service, reason) {
@@ -85,25 +87,28 @@ function mark(date, name, service, reason) {
   sh.getRange(r, 5).setNumberFormat("yyyy-mm-dd hh:mm");
 }
 
-// 명단을 다시 쓰면서 기존 코드는 유지하고, 새 목원에게 코드를 만들어 줌
-function saveMembers(names) {
+// 명단을 다시 쓰면서 기존 코드는 유지하고, 새 가정에게 코드를 만들어 줌
+// groups = [["홍길동", "김영희"], ["김철수"]] — 한 묶음(부부 등)은 같은 코드
+function saveMembers(groups) {
   const sh = sheet(MEMBER_SHEET, ["이름", "코드"]);
   const old = {};
   memberRows().forEach(r => old[r[0]] = r[1]);
-  const used = new Set(Object.values(old).filter(Boolean));
-  const codes = {};
-  names.forEach(n => {
-    let c = old[n];
+  const taken = new Set(Object.values(old).filter(Boolean));   // 새 코드는 예전 코드와도 안 겹치게
+  const given = new Set();
+  const codes = {}, rows = [];
+  groups.forEach(g => {
+    const names = g.map(n => String(n).trim()).filter(Boolean);
+    if (!names.length) return;
+    // 묶음 안 누군가의 예전 코드를 이어 씀 (다른 묶음이 이미 가져갔으면 새로 만듦)
+    let c = names.map(n => old[n]).find(x => x && !given.has(x));
     if (!c) {
-      do { c = String(1000 + Math.floor(Math.random() * 9000)); } while (used.has(c) || c === ADMIN_PW);
-      used.add(c);
+      do { c = String(1000 + Math.floor(Math.random() * 9000)); } while (taken.has(c) || given.has(c) || c === ADMIN_PW);
     }
-    codes[n] = c;
+    given.add(c);
+    names.forEach(n => { codes[n] = c; rows.push([n, c]); });
   });
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
-  if (names.length) {
-    sh.getRange(2, 1, names.length, 2).setNumberFormat("@").setValues(names.map(n => [n, codes[n]]));
-  }
+  if (rows.length) sh.getRange(2, 1, rows.length, 2).setNumberFormat("@").setValues(rows);
   return codes;
 }
 
